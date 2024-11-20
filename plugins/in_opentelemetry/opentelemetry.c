@@ -64,9 +64,11 @@ static int in_opentelemetry_collect(struct flb_input_instance *ins,
 static int in_opentelemetry_init(struct flb_input_instance *ins,
                                  struct flb_config *config, void *data)
 {
-    unsigned short int        port;
     int                       ret;
     struct flb_opentelemetry *ctx;
+    int                       transport;
+    char                     *listen_address;
+    unsigned short int        port;
 
     (void) data;
 
@@ -88,15 +90,24 @@ static int in_opentelemetry_init(struct flb_input_instance *ins,
     /* Set the context */
     flb_input_set_context(ins, ctx);
 
-    port = (unsigned short int) strtoul(ctx->tcp_port, NULL, 10);
+    if (strncmp(ins->host.listen, "unix://", 7) == 0) {
+        transport = FLB_TRANSPORT_UNIX_STREAM;
+        listen_address = ins->host.listen + 7; /* Skip 'unix://' prefix */
+        port = 0;
+    }
+    else {
+        transport = FLB_TRANSPORT_TCP;
+        listen_address = ins->host.listen;
+        port = ins->host.port;
+    }
 
     if (ctx->enable_http2) {
         ret = flb_http_server_init(&ctx->http_server,
                                     HTTP_PROTOCOL_VERSION_AUTODETECT,
                                     (FLB_HTTP_SERVER_FLAG_KEEPALIVE | FLB_HTTP_SERVER_FLAG_AUTO_INFLATE),
                                     NULL,
-                                    ins->host.listen,
-                                    ins->host.port,
+                                    listen_address,
+                                    port,
                                     ins->tls,
                                     ins->flags,
                                     &ins->net_setup,
@@ -131,9 +142,9 @@ static int in_opentelemetry_init(struct flb_input_instance *ins,
         flb_input_downstream_set(ctx->http_server.downstream, ctx->ins);
     }
     else {
-        ctx->downstream = flb_downstream_create(FLB_TRANSPORT_TCP,
+        ctx->downstream = flb_downstream_create(transport,
                                                 ins->flags,
-                                                ctx->listen,
+                                                listen_address,
                                                 port,
                                                 ins->tls,
                                                 config,
@@ -165,7 +176,12 @@ static int in_opentelemetry_init(struct flb_input_instance *ins,
         ctx->collector_id = ret;
     }
 
-    flb_plg_info(ctx->ins, "listening on %s:%s", ctx->listen, ctx->tcp_port);
+    if (transport == FLB_TRANSPORT_UNIX_STREAM) {
+        flb_plg_info(ctx->ins, "listening on UNIX socket %s", listen_address);
+    }
+    else {
+        flb_plg_info(ctx->ins, "listening on %s:%s", ctx->listen, ctx->tcp_port);
+    }
 
     if (ctx->successful_response_code != 200 &&
         ctx->successful_response_code != 201 &&
